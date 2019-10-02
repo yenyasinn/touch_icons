@@ -1,0 +1,5 @@
+name: Touch icons
+type: module
+core: 8.x
+description: Provides additional theme settings to display special Web Clip icons on iOS devices.
+package: Theme settings
