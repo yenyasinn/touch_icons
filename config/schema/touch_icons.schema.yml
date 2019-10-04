@@ -1,0 +1,18 @@
+touch_icons.theme_settings.*:
+  type: config_object
+  label: 'Touch icons theme settings'
+  mapping:
+    touch_icons:
+      type: sequence
+      label: 'Touch icon'
+      sequence:
+        type: mapping
+        mapping:
+          rel:
+            type: string
+          size:
+            type: integer
+          path:
+            type: string
+          mimetype:
+            type: string
