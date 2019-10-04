@@ -1,10 +1,14 @@
 <?php
 
+use Drupal\Component\Utility\UrlHelper;
 use Drupal\Core\File\Exception\FileException;
-use \Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\File\FileSystemInterface;
 
 /**
  * Implements hook_FORM_ID_alter().
+ *
+ * Alters theme settings form to provide one way for all icons adjustments.
  */
 function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface &$form_state, $form_id = NULL) {
   // Work-around for a core bug affecting admin themes. See issue #943212.
@@ -13,42 +17,88 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
   }
 
   $build_info = $form_state->getBuildInfo();
-  if (!(isset($build_info['args'][0]) && ($theme = $build_info['args'][0]))) {
+  if (empty($build_info['args'][0])) {
     return;
   }
 
-  $form['touch_icons'] = [
+  $description = '<p>' . t('<strong>Size</strong> - due to icon has square shape set size of the one side.') . '</p>';
+  $description .= '<p>' . t('<strong>Path</strong> - Examples: icon.png (for a file in the public filesystem), public://icon.png, sites/default/files/icon.png, core/themes/seven/images/noise-low.png') . '</p>';
+  $description .= '<p>' . t('<strong>Upload</strong> - If you don\'t have direct file access to the server, use this field to upload your touch icon. Files will be saved in the <strong>"public://touch_icons"</strong> folder.') . '</p>';
+
+  $form['touch_icons_details'] = [
     '#type' => 'details',
     '#title' => t('Touch icons'),
     '#open' => TRUE,
+    '#description' => $description,
   ];
-  $form['touch_icons']['default_touch_icon'] = [
-    '#type' => 'checkbox',
-    '#title' => t('Use the touch icon supplied by the module'),
-    '#default_value' => theme_get_setting('default_touch_icon', $theme),
-    '#tree' => FALSE,
-  ];
-  $form['touch_icons']['settings'] = [
-    '#type' => 'container',
-    '#states' => [
-      // Hide the touch icons settings when using the default touch icon.
-      'invisible' => [
-        'input[name="default_touch_icons"]' => ['checked' => TRUE],
-      ],
+
+  $form['touch_icons_details']['touch_icons_settings'] = [
+    '#type' => 'table',
+    '#tree' => TRUE,
+    '#header' => [
+      t('Rel'),
+      t('Size'),
+      t('Path'),
+      t('Upload'),
     ],
+    '#prefix' => '<div id="touch-icons-table-wrapper">',
+    '#suffix' => '</div>',
   ];
-  $form['touch_icons']['settings']['touch_icon_path'] = [
-    '#type' => 'textfield',
-    '#title' => t('Path to custom icon'),
-    '#default_value' => theme_get_setting('touch_icon_path', $theme),
-  ];
-  $form['touch_icons']['settings']['touch_icon_upload'] = [
-    '#type' => 'file',
-    '#title' => t('Upload touch icon image'),
-    '#maxlength' => 40,
-    '#description' => t("If you don't have direct file access to the server, use this field to upload your touch icon."),
-    '#upload_validators' => [
-      'file_validate_is_image' => [],
+
+  $theme = $build_info['args'][0];
+  $config = \Drupal::configFactory()
+    ->getEditable('touch_icons.theme_settings.' . $theme);
+  $settings = $config->get('touch_icons');
+
+  if (!$form_state->has('touch_icon_rows')) {
+    $initial_rows = empty($settings) ? 0 : count($settings);
+    $form_state->set('touch_icon_rows', $initial_rows);
+  }
+
+  for ($i = 0; $i < $form_state->get('touch_icon_rows'); $i++) {
+    $setting = array_shift($settings);
+
+    $form['touch_icons_details']['touch_icons_settings'][] = [
+      'rel' => [
+        '#type' => 'select',
+        '#options' => [
+          'apple-touch-icon' => 'apple-touch-icon',
+          'apple-touch-icon-precomposed' => 'apple-touch-icon-precomposed',
+          'icon' => 'icon',
+          //'msapplication-TileImage' => 'msapplication-TileImage',
+          //'mask-icon' => 'mask-icon',
+        ],
+        '#default_value' => $setting['rel'] ?? '',
+      ],
+      'size' => [
+        '#type' => 'number',
+        '#min' => 1,
+        '#max' => 999,
+        '#step' => 1,
+        '#size' => 3,
+        '#default_value' => $setting['size'] ?? '',
+      ],
+      'path' => [
+        '#type' => 'textfield',
+        '#default_value' => $setting['path'] ?? '',
+      ],
+      'upload' => [
+        '#type' => 'managed_file',
+        //'#maxlength' => 40,
+        '#upload_validators' => [
+          'file_validate_extensions' => ['gif png jpg jpeg'],
+        ],
+      ]
+    ];
+  }
+
+  $form['touch_icons_details']['add'] = [
+    '#type' => 'submit',
+    '#value' => t('Add row'),
+    '#submit' => ['touch_icon_system_theme_settings_form_add_another_submit'],
+    '#ajax' => [
+      'callback' => 'touch_icon_system_theme_settings_form_add_another',
+      'wrapper' => 'touch-icons-table-wrapper',
     ],
   ];
 
@@ -56,39 +106,62 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
   array_unshift($form['#submit'], 'touch_icon_system_theme_settings_form_submit');
 }
 
+
 /**
+ * Ajax callback for adding additional row.
+ *
  * @param array $form
+ *   The form structure.
  * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   The form state.
+ *
+ * @return array
+ *   The new form part.
+ */
+function touch_icon_system_theme_settings_form_add_another(array $form, FormStateInterface $form_state) {
+  return $form['touch_icons_details']['touch_icons_settings'];
+}
+
+/**
+ * Submit callback for adding a new row.
+ */
+function touch_icon_system_theme_settings_form_add_another_submit(array $form, FormStateInterface $form_state) {
+  $form_state->set('touch_icon_rows', $form_state->get('touch_icon_rows') + 1);
+  $form_state->setRebuild(TRUE);
+}
+
+/**
+ * Theme settings form form validator.
  */
 function touch_icon_system_theme_settings_form_validate(array &$form, FormStateInterface $form_state) {
-  // Check for a new uploaded touch icon.
-  $file = _file_save_upload_from_form($form['touch_icons']['settings']['touch_icon_upload'], $form_state, 0);
-  if ($file) {
-    // Put the temporary file in form_values so we can save it on submit.
-    $form_state->setValue('touch_icon_upload', $file);
+  if ($form_state->getValue('op') == $form['touch_icons_details']['add']['#value']) {
+    // Don't validate "Add row" request.
+    return;
   }
 
-  // When intending to use the default touch icon, unset the touch icon path.
-  if ($form_state->getValue('default_touch_icon')) {
-    $form_state->unsetValue('touch_icon_path');
-  }
-
-  // If the user provided a path for a logo or favicon file, make sure a file
-  // exists at that path.
-  if ($form_state->getValue('touch_icon_path')) {
-    $path = touch_icon_validate_path($form_state->getValue('touch_icon_path'));
-    if (!$path) {
-      $form_state->setErrorByName('touch_icon_path', t('The custom touch icon path is invalid.'));
+  if ($touch_icons_settings = $form_state->getValue('touch_icons_settings')) {
+    foreach ($touch_icons_settings as $key => $setting) {
+      //touch_icon_system_theme_settings_form_validate_upload_file($key, $form, $form_state);
+      touch_icon_system_theme_settings_form_validate_path($key, $setting, $form_state);
     }
   }
 }
 
 /**
- * Helper function for the system_theme_settings form.
- *
- * Attempts to validate normal system paths, paths relative to the public files
- * directory, or stream wrapper URIs. If the given path is any of the above,
- * returns a valid path or URI that the theme system can display.
+ * Validate path value.
+ */
+function touch_icon_system_theme_settings_form_validate_path($key, $setting, $form_state) {
+  if ($setting['path']) {
+    $path = touch_icon_validate_path($setting['path']);
+    if (!$path) {
+      // todo: field have to be highlighted.
+      $form_state->setErrorByName("touch_icons_settings[$key][path]", t('The touch icon path is invalid.'));
+    }
+  }
+}
+
+/**
+ * Validates path that user has entered. Ensures that file exists.
  *
  * @param string $path
  *   A path relative to the Drupal root or to the public files directory, or
@@ -118,25 +191,137 @@ function touch_icon_validate_path($path) {
 }
 
 /**
- * @param array $form
- * @param \Drupal\Core\Form\FormStateInterface $form_state
+ * Theme settings form submit.
  */
 function touch_icon_system_theme_settings_form_submit(array &$form, FormStateInterface $form_state) {
-  $values = $form_state->getValues();
+  // Theme that is set up.
+  $build_info = $form_state->getBuildInfo();
+  $theme = $build_info['args'][0];
 
-  // If the user uploaded a new logo or favicon, save it to a permanent location
-  // and use it in place of the default theme-provided file.
-  try {
-    if (!empty($values['touch_icon_upload'])) {
-      $filename = \Drupal::service('file_system')->copy($values['touch_icon_upload']->getFileUri(), file_default_scheme() . '://');
+  $entity_type_manager = \Drupal::entityTypeManager();
+  $file_system = \Drupal::service('file_system');
 
-      // Theme settings will be saved in ThemeSettingsForm::submitForm().
-      $form_state->setValue('default_touch_icon', 0);
-      $form_state->setValue('touch_icon_path', $filename);
-      $form_state->unsetValue('touch_icon_upload');
+  // Prepare destination folder.
+  $destination_folder = 'public://touch_icons/';
+  if (!file_exists($destination_folder)) {
+    $file_system->mkdir($destination_folder);
+  }
+
+  // Process settings.
+  $touch_icons_settings = $form_state->getValue('touch_icons_settings');
+  $settings = [];
+  foreach ($touch_icons_settings as $touch_icons_setting) {
+    $path = trim($touch_icons_setting['path']);
+    $rel = $touch_icons_setting['rel'];
+    $size = trim($touch_icons_setting['size']);
+
+    if (!empty($touch_icons_setting['upload'][0])) {
+      // File has been uploaded.
+      $fid = $touch_icons_setting['upload'][0];
+      $file = $entity_type_manager->getStorage('file')->load($fid);
+      $destination = $destination_folder . $file->getFilename();
+      // Copy file to the specific folder.
+      // Uploaded file will be removed by cron.
+      try {
+        $path = $file_system->copy($file->getFileUri(), $destination);
+        $path = str_replace('public://', '', $path);
+      }
+      catch (FileException $e) {
+        // Show error.
+        \Drupal::messenger()->addError($e->getMessage());
+      }
+    }
+    
+    if (!empty($path)) {
+      // We store all files in public directory so let's use one standard
+      // for file naming.
+      $path = str_replace('public://', '', $path);
+      // Get a file mime type.
+      $mime_type = \Drupal::service('file.mime_type.guesser')->guess($path);
+
+      $setting = [
+        'rel' => $rel,
+        'size' => $size,
+        'path' => $path,
+        'mimetype' => $mime_type,
+      ];
+
+      $name = $size ? $rel . '-' . $size : $rel;
+      $settings[$name] = $setting;
     }
   }
-  catch (FileException $e) {
-    // Ignore.
+
+  if (!empty($settings)) {
+    // Save settings.
+    ksort($settings);
+    $config = \Drupal::configFactory()
+      ->getEditable('touch_icons.theme_settings.' . $theme);
+
+    $config
+      ->set('touch_icons', $settings)
+      ->save();
   }
+
+  // This setting should not be saved in theme settings.
+  $form_state->unsetValue('touch_icons_settings');
+}
+
+/**
+ * Implements hook_page_attachments().
+ */
+function touch_icons_page_attachments(array &$attachments) {
+  // Gets settings for active theme.
+  $theme = \Drupal::service('theme.manager')->getActiveTheme()->getName();
+  $settings = \Drupal::config('touch_icons.theme_settings.' . $theme)->get('touch_icons');
+  if (empty($settings)) {
+    return;
+  }
+
+  foreach ($settings as $key => $setting) {
+    $name = 'touch_icons_' . str_replace('-', '_', $key);
+
+    $attachment_processor = 'touch_icons_attachment_processor_' . str_replace('-', '_', $setting['rel']);
+    if (function_exists($attachment_processor)) {
+      $attachment = $attachment_processor($setting);
+      $attachments['#attached']['html_head'][] = [$attachment, $name];
+    }
+  }
+}
+
+/**
+ * Generates page header attachment for apple touch icon.
+ */
+function touch_icons_attachment_processor_apple_touch_icon($setting) {
+  // Setting attributes.
+  $attributes = [];
+  $attributes['rel'] = $setting['rel'];
+  $path = file_url_transform_relative(file_create_url($setting['path']));
+  $attributes['href'] = UrlHelper::stripDangerousProtocols($path);
+  if (!empty($setting['size'])) {
+    $attributes['sizes'] = $setting['size'] . 'x' . $setting['size'];
+  }
+
+  $attachment = [
+    '#tag' => 'link',
+    '#attributes' => $attributes,
+  ];
+
+  return $attachment;
+}
+
+/**
+ * Generates page header attachment for apple touch icon precomposed.
+ */
+function touch_icons_attachment_processor_apple_touch_icon_precomposed($setting) {
+  return touch_icons_attachment_processor_apple_touch_icon($setting);
+}
+
+/**
+ * Generates page header attachment for icon.
+ */
+function touch_icons_attachment_processor_icon($setting) {
+  $attachment = touch_icons_attachment_processor_apple_touch_icon($setting);
+  $attachment['#attributes']['type'] = $setting['mimetype'];
+
+  return $attachment;
 }
