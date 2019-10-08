@@ -1,9 +1,13 @@
 <?php
 
+/**
+ * @file
+ * Touch icon module.
+ */
+
 use Drupal\Component\Utility\UrlHelper;
 use Drupal\Core\File\Exception\FileException;
 use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\File\FileSystemInterface;
 
 /**
  * Implements hook_FORM_ID_alter().
@@ -11,17 +15,12 @@ use Drupal\Core\File\FileSystemInterface;
  * Alters theme settings form to provide one way for all icons adjustments.
  */
 function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface &$form_state, $form_id = NULL) {
-  // Work-around for a core bug affecting admin themes. See issue #943212.
-  if (isset($form_id)) {
-    //return;
-  }
-
   $build_info = $form_state->getBuildInfo();
   if (empty($build_info['args'][0])) {
     return;
   }
-
-  $description = '<p>' . t('<strong>Size</strong> - due to icon has square shape set size of the one side.') . '</p>';
+  $description = '<p>' . t('<strong>Icon type</strong> - different icon types are supported.') . '</p>';
+  $description .= '<p>' . t('<strong>Size</strong> - due to icon has square shape set size of the one side.') . '</p>';
   $description .= '<p>' . t('<strong>Path</strong> - Examples: icon.png (for a file in the public filesystem), public://icon.png, sites/default/files/icon.png, core/themes/seven/images/noise-low.png') . '</p>';
   $description .= '<p>' . t('<strong>Upload</strong> - If you don\'t have direct file access to the server, use this field to upload your touch icon. Files will be saved in the <strong>"public://touch_icons"</strong> folder.') . '</p>';
 
@@ -36,7 +35,7 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
     '#type' => 'table',
     '#tree' => TRUE,
     '#header' => [
-      t('Rel'),
+      t('Icon type'),
       t('Size'),
       t('Path'),
       t('Upload'),
@@ -65,8 +64,7 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
           'apple-touch-icon' => 'apple-touch-icon',
           'apple-touch-icon-precomposed' => 'apple-touch-icon-precomposed',
           'icon' => 'icon',
-          //'msapplication-TileImage' => 'msapplication-TileImage',
-          //'mask-icon' => 'mask-icon',
+          'msapplication-TileImage' => 'msapplication-TileImage',
         ],
         '#default_value' => $setting['rel'] ?? '',
       ],
@@ -80,15 +78,15 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
       ],
       'path' => [
         '#type' => 'textfield',
-        '#default_value' => $setting['path'] ?? '',
+        '#default_value' => $setting['path'] ? str_replace('public://', '', $setting['path']) : '',
       ],
       'upload' => [
         '#type' => 'managed_file',
-        //'#maxlength' => 40,
+        // '#maxlength' => 40,
         '#upload_validators' => [
           'file_validate_extensions' => ['gif png jpg jpeg'],
         ],
-      ]
+      ],
     ];
   }
 
@@ -105,7 +103,6 @@ function touch_icons_form_system_theme_settings_alter(&$form, FormStateInterface
   array_unshift($form['#validate'], 'touch_icon_system_theme_settings_form_validate');
   array_unshift($form['#submit'], 'touch_icon_system_theme_settings_form_submit');
 }
-
 
 /**
  * Ajax callback for adding additional row.
@@ -139,10 +136,25 @@ function touch_icon_system_theme_settings_form_validate(array &$form, FormStateI
     return;
   }
 
+  $config_keys = [];
   if ($touch_icons_settings = $form_state->getValue('touch_icons_settings')) {
     foreach ($touch_icons_settings as $key => $setting) {
-      //touch_icon_system_theme_settings_form_validate_upload_file($key, $form, $form_state);
+      if (empty($setting['path'])) {
+        // Don't validate if path is empty.
+        continue;
+      }
+
+      // Validates path.
       touch_icon_system_theme_settings_form_validate_path($key, $setting, $form_state);
+
+      // Check uniqueness.
+      $config_key = touch_icons_get_config_key($setting);
+      if (isset($config_keys[$config_key])) {
+        $form_state->setErrorByName("touch_icons_settings[$key][rel]", t('Combination of touch icon fields Rel and Size has to be unique.'));
+      }
+      else {
+        $config_keys[$config_key] = $config_key;
+      }
     }
   }
 }
@@ -150,12 +162,16 @@ function touch_icon_system_theme_settings_form_validate(array &$form, FormStateI
 /**
  * Validate path value.
  */
-function touch_icon_system_theme_settings_form_validate_path($key, $setting, $form_state) {
+function touch_icon_system_theme_settings_form_validate_path($key, $setting, &$form_state) {
   if ($setting['path']) {
     $path = touch_icon_validate_path($setting['path']);
     if (!$path) {
       // todo: field have to be highlighted.
       $form_state->setErrorByName("touch_icons_settings[$key][path]", t('The touch icon path is invalid.'));
+    }
+    else {
+      $setting['path'] = $path;
+      $form_state->setValue(['touch_icons_settings', $key], $setting);
     }
   }
 }
@@ -166,6 +182,7 @@ function touch_icon_system_theme_settings_form_validate_path($key, $setting, $fo
  * @param string $path
  *   A path relative to the Drupal root or to the public files directory, or
  *   a stream wrapper URI.
+ *
  * @return mixed
  *   A valid path that can be displayed through the theme system, or FALSE if
  *   the path could not be validated.
@@ -224,18 +241,14 @@ function touch_icon_system_theme_settings_form_submit(array &$form, FormStateInt
       // Uploaded file will be removed by cron.
       try {
         $path = $file_system->copy($file->getFileUri(), $destination);
-        $path = str_replace('public://', '', $path);
       }
       catch (FileException $e) {
         // Show error.
         \Drupal::messenger()->addError($e->getMessage());
       }
     }
-    
+
     if (!empty($path)) {
-      // We store all files in public directory so let's use one standard
-      // for file naming.
-      $path = str_replace('public://', '', $path);
       // Get a file mime type.
       $mime_type = \Drupal::service('file.mime_type.guesser')->guess($path);
 
@@ -246,8 +259,8 @@ function touch_icon_system_theme_settings_form_submit(array &$form, FormStateInt
         'mimetype' => $mime_type,
       ];
 
-      $name = $size ? $rel . '-' . $size : $rel;
-      $settings[$name] = $setting;
+      $config_key = touch_icons_get_config_key($setting);
+      $settings[$config_key] = $setting;
     }
   }
 
@@ -281,6 +294,8 @@ function touch_icons_page_attachments(array &$attachments) {
     $name = 'touch_icons_' . str_replace('-', '_', $key);
 
     $attachment_processor = 'touch_icons_attachment_processor_' . str_replace('-', '_', $setting['rel']);
+    $attachment_processor = strtolower($attachment_processor);
+
     if (function_exists($attachment_processor)) {
       $attachment = $attachment_processor($setting);
       $attachments['#attached']['html_head'][] = [$attachment, $name];
@@ -324,4 +339,28 @@ function touch_icons_attachment_processor_icon($setting) {
   $attachment['#attributes']['type'] = $setting['mimetype'];
 
   return $attachment;
+}
+
+/**
+ * Generates page header attachment for msapplication tile image.
+ */
+function touch_icons_attachment_processor_msapplication_tileimage($setting) {
+  $path = file_url_transform_relative(file_create_url($setting['path']));
+
+  $attachment = [
+    '#tag' => 'meta',
+    '#attributes' => [
+      'name' => $setting['rel'],
+      'content' => UrlHelper::stripDangerousProtocols($path),
+    ],
+  ];
+
+  return $attachment;
+}
+
+/**
+ * Generates configuration key.
+ */
+function touch_icons_get_config_key($setting) {
+  return $setting['size'] ? $setting['rel'] . '-' . $setting['size'] : $setting['rel'];
 }
