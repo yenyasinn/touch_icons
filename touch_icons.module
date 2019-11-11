@@ -230,40 +230,42 @@ function touch_icon_system_theme_settings_form_submit(array &$form, FormStateInt
   // Process settings.
   $touch_icons_settings = $form_state->getValue('touch_icons_settings');
   $settings = [];
-  foreach ($touch_icons_settings as $touch_icons_setting) {
-    $path = trim($touch_icons_setting['path']);
-    $rel = $touch_icons_setting['rel'];
-    $size = trim($touch_icons_setting['size']);
+  if ($touch_icons_settings) {
+    foreach ($touch_icons_settings as $touch_icons_setting) {
+      $path = trim($touch_icons_setting['path']);
+      $rel = $touch_icons_setting['rel'];
+      $size = trim($touch_icons_setting['size']);
 
-    if (!empty($touch_icons_setting['upload'][0])) {
-      // File has been uploaded.
-      $fid = $touch_icons_setting['upload'][0];
-      $file = $entity_type_manager->getStorage('file')->load($fid);
-      $destination = $destination_folder . $file->getFilename();
-      // Copy file to the specific folder.
-      // Uploaded file will be removed by cron.
-      try {
-        $path = $file_system->copy($file->getFileUri(), $destination);
+      if (!empty($touch_icons_setting['upload'][0])) {
+        // File has been uploaded.
+        $fid = $touch_icons_setting['upload'][0];
+        $file = $entity_type_manager->getStorage('file')->load($fid);
+        $destination = $destination_folder . $file->getFilename();
+        // Copy file to the specific folder.
+        // Uploaded file will be removed by cron.
+        try {
+          $path = $file_system->copy($file->getFileUri(), $destination);
+        }
+        catch (FileException $e) {
+          // Show error.
+          \Drupal::messenger()->addError($e->getMessage());
+        }
       }
-      catch (FileException $e) {
-        // Show error.
-        \Drupal::messenger()->addError($e->getMessage());
+
+      if (!empty($path)) {
+        // Get a file mime type.
+        $mime_type = \Drupal::service('file.mime_type.guesser')->guess($path);
+
+        $setting = [
+          'rel' => $rel,
+          'size' => $size,
+          'path' => $path,
+          'mimetype' => $mime_type,
+        ];
+
+        $config_key = touch_icons_get_config_key($setting);
+        $settings[$config_key] = $setting;
       }
-    }
-
-    if (!empty($path)) {
-      // Get a file mime type.
-      $mime_type = \Drupal::service('file.mime_type.guesser')->guess($path);
-
-      $setting = [
-        'rel' => $rel,
-        'size' => $size,
-        'path' => $path,
-        'mimetype' => $mime_type,
-      ];
-
-      $config_key = touch_icons_get_config_key($setting);
-      $settings[$config_key] = $setting;
     }
   }
 
